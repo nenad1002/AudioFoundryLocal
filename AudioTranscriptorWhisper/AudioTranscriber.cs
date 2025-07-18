@@ -1,15 +1,10 @@
-﻿using Microsoft.VisualBasic;
-using NAudio.Wave;
-using System;
-using System.Runtime.InteropServices;
-using System.Threading;
-using System.Threading.Channels;
-using System.Threading.Tasks;
+﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
 
 namespace AudioTranscriberLib
 {
     // ----------------------------------------------------------------
-    // COM audio configuration interface (model-specific)
+    // COM audio configuration interface
     // ----------------------------------------------------------------
     [ComVisible(true)]
     [Guid("11223344-5566-7788-99AA-BBCCDDEEFF00")]
@@ -40,76 +35,6 @@ namespace AudioTranscriberLib
     }
 
     // ----------------------------------------------------------------
-    // COM callback interface for raw audio data
-    // ----------------------------------------------------------------
-    [ComVisible(true)]
-    [Guid("ABCDEF00-1111-2222-3333-444455556677")]
-    [InterfaceType(ComInterfaceType.InterfaceIsDual)]
-    public interface IAudioDataCallback
-    {
-        [DispId(1)]
-        void OnAudioData(
-            [MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_UI1)]
-            byte[] pcmChunk);
-    }
-
-    // ----------------------------------------------------------------
-    // COM audio stream interface
-    // ----------------------------------------------------------------
-    [ComVisible(true)]
-    [Guid("A1B2C3D4-1234-5678-9ABC-DEF012345678")]
-    [InterfaceType(ComInterfaceType.InterfaceIsDual)]
-    public interface IAudioStream
-    {
-        [DispId(1)] int SampleRate { get; }
-        [DispId(2)] int ChunkSize { get; }
-        [DispId(3)] int DeviceIndex { get; }
-        [DispId(4)]
-        void RegisterCallback(IAudioDataCallback callback);
-    }
-
-    // ----------------------------------------------------------------
-    // COM audio stream
-    // ----------------------------------------------------------------
-    [ComVisible(true)]
-    [Guid("A1B2C3D4-1234-5678-9ABC-DEF012345679")]
-    [ProgId("AudioTranscriber.AudioStream")]
-    [ClassInterface(ClassInterfaceType.None)]
-    public class AudioStream : IAudioStream
-    {
-        private IAudioDataCallback? _sink;
-        private readonly WaveInEvent _capture;
-
-        public AudioStream(int sampleRate, int chunkSize, int deviceIndex)
-        {
-            SampleRate = sampleRate;
-            ChunkSize = chunkSize;
-            DeviceIndex = deviceIndex;
-
-            _capture = new WaveInEvent
-            {
-                DeviceNumber = DeviceIndex,
-                WaveFormat = new WaveFormat(SampleRate, 16, 1),
-                BufferMilliseconds = (int)(1000.0 * ChunkSize / SampleRate)
-            };
-            _capture.DataAvailable += (s, e) =>
-            {
-                _sink?.OnAudioData(e.Buffer);
-            };
-        }
-
-        public int SampleRate { get; }
-        public int ChunkSize { get; }
-        public int DeviceIndex { get; }
-
-        public void RegisterCallback(IAudioDataCallback callback)
-        {
-            _sink = callback;
-            _capture.StartRecording();
-        }
-    }
-
-    // ----------------------------------------------------------------
     // COM callback interface for transcription results
     // ----------------------------------------------------------------
     [ComVisible(true)]
@@ -123,7 +48,7 @@ namespace AudioTranscriberLib
     }
 
     // ----------------------------------------------------------------
-    // COM control interface for the transcriber
+    // COM control interface for the transcriber, using IAudioStream
     // ----------------------------------------------------------------
     [ComVisible(true)]
     [Guid("AABBCCDD-7777-8888-9999-AAAABBBBCCCC")]
@@ -132,30 +57,31 @@ namespace AudioTranscriberLib
     {
         [DispId(1)] void Initialize(IAudioConfig config);
         [DispId(2)] void RegisterCallback(ITranscriptionCallback callback);
-        [DispId(3)] void Start(IAudioStream stream);
+        [DispId(3)]
+        void Start(IStream audioStream);
         [DispId(4)] void Stop();
     }
 
     // ----------------------------------------------------------------
-    // COM coclass implementing the transcriber and audio-data sink
+    // COM coclass implementing the transcriber
     // ----------------------------------------------------------------
     [ComVisible(true)]
     [Guid("DDCCBBAA-CCCC-BBBB-AAAA-999988887777")]
     [ProgId("AudioTranscriber.Component")]
     [ClassInterface(ClassInterfaceType.None)]
-    public class AudioTranscriber : IAudioTranscriber, IAudioDataCallback
+    public class AudioTranscriber : IAudioTranscriber
     {
         private ITranscriptionCallback? _callback;
         private IAudioConfig? _config;
-        private IAudioStream? _stream;
-        private Channel<byte[]>? _channel;
+        private IStream? _stream;
         private CancellationTokenSource? _cts;
         private Task? _processingTask;
+        // TODO: revise buffer size
+        private readonly int _bufferSize = 4096;
 
-        // use the constructor as the input entry
         public AudioTranscriber(IAudioConfig config)
         {
-            this.Initialize(config);
+            Initialize(config);
         }
 
         public void Initialize(IAudioConfig config)
@@ -168,82 +94,60 @@ namespace AudioTranscriberLib
             _callback = callback;
         }
 
-        public void Start(IAudioStream stream)
+        public void Start(IStream audioStream)
         {
             if (_config == null)
-                throw new InvalidOperationException("Call Initialize(config) before Start(stream).");
+                throw new InvalidOperationException("Initialize must be called first.");
 
-            _stream = stream ?? throw new ArgumentNullException(nameof(stream));
-
-            _channel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
-            {
-                SingleReader = true,
-                SingleWriter = false
-            });
+            _stream = audioStream;
             _cts = new CancellationTokenSource();
-
-            // Start the loop.
-            _processingTask = ProcessLoopAsync(_cts.Token);
-
-            // Register for automatic audio data events
-            _stream.RegisterCallback(this);
+            _processingTask = Task.Run(() => ProcessStreamLoop(_cts.Token), _cts.Token);
         }
 
         public void Stop()
         {
-            if (_stream is AudioStream audioStream)
-            {
-                // Stop recording.
-                audioStream?.GetType().GetMethod("StopRecording")?.Invoke(audioStream, null);
-            }
-
-            // Cancel transcription loop
-            if (_cts == null) return;
-            _cts.Cancel();
-            try
-            {
-                _processingTask?.Wait();
-            }
-            catch (AggregateException ae) when (ae.InnerException is OperationCanceledException)
-            {
-                // expected
-            }
+            _cts?.Cancel();
+            try { _processingTask?.Wait(); } catch (AggregateException ae) when (ae.InnerException is OperationCanceledException) { }
         }
 
-        // Receives raw PCM from IAudioStream
-        public void OnAudioData(byte[] pcmChunk)
+        private void ProcessStreamLoop(CancellationToken token)
         {
-            if (_cts?.IsCancellationRequested == true) return;
-
-            // Write it on the channel to be consumed by the processing loop and fed into a model.
-            _channel?.Writer.TryWrite(pcmChunk);
-        }
-
-        private async Task ProcessLoopAsync(CancellationToken token)
-        {
-            try
+            var buffer = new byte[_bufferSize];
+            while (!token.IsCancellationRequested)
             {
-                await foreach (var chunk in _channel!.Reader.ReadAllAsync(token))
+                int bytesRead;
+                IntPtr readPtr = Marshal.AllocCoTaskMem(sizeof(int));
+                try
                 {
-                    // Here feed to Whisper or FoundryLocalManager.
-                    string partial = await TranscribePartialAsync(chunk, token);
-                    _callback?.OnPartialResult(partial);
+                    _stream!.Read(buffer, _bufferSize, readPtr);
+                    bytesRead = Marshal.ReadInt32(readPtr);
                 }
+                catch (Exception ex)
+                {
+                    _callback?.OnError(ex.Message);
+                    break;
+                }
+                finally
+                {
+                    Marshal.FreeCoTaskMem(readPtr);
+                }
+
+                if (bytesRead <= 0)
+                {
+                    Thread.Sleep(10);
+                    continue;
+                }
+
+                // TODO: here it goes a real call into Whisper.
+                string partial = TranscribePartial(buffer, bytesRead);
+                _callback?.OnPartialResult(partial);
             }
-            catch (OperationCanceledException)
-            {
-                // normal shutdown
-            }
-            catch (Exception ex)
-            {
-                _callback?.OnError(ex.Message);
-            }
+            _callback?.OnFinalResult("[stream ended]");
         }
 
-        // Replace with actual code call into Whisper
-        private Task<string> TranscribePartialAsync(byte[] chunk, CancellationToken token)
+        private string TranscribePartial(byte[] chunk, int length)
         {
-            return Task.FromResult($"[partial {chunk.Length} bytes @ {_stream?.SampleRate}Hz]");
+            return $"[partial {length} bytes]";
         }
     }
 }
