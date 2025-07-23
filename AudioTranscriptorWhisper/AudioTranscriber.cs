@@ -48,23 +48,38 @@ namespace AudioTranscriberLib
     }
 
     // ----------------------------------------------------------------
-    // COM control interface for the transcriber, using IAudioStream
+    // COM control interface for the streaming transcriber, using IAudioStream
     // ----------------------------------------------------------------
     [ComVisible(true)]
     [Guid("AABBCCDD-7777-8888-9999-AAAABBBBCCCC")]
     [InterfaceType(ComInterfaceType.InterfaceIsDual)]
-    public interface IAudioTranscriber
+    public interface IAudioStreamingTranscriber
     {
         [DispId(1)] void Initialize(IAudioConfig config);
         [DispId(2)] void RegisterCallback(ITranscriptionCallback callback);
         [DispId(3)]
         void Start(IStream audioStream);
         [DispId(4)] void Stop();
-        [DispId(5)]
-        string TranscribeBuffer(
-     [MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_UI1)]
-        byte[] audioBuffer
- );
+    }
+
+    // ----------------------------------------------------------------
+    // COM control interface for the non-streaming transcriber, using IAudioStream
+    // ----------------------------------------------------------------
+    [ComVisible(true)]
+    [Guid("AABBCCDD-7777-8888-9999-AAAABBBBCCCC")]
+    [InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    public interface IAudioNonStreamingTranscriber
+    {
+        [DispId(1)] void Initialize(IAudioConfig config);
+        [DispId(2)]
+        void TranscribeBufferAsync(
+            [MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_UI1)]
+        byte[] audioBuffer,
+            ITranscriptionCallback callback
+        );
+        // Cancel in‑flight buffer transcription.
+        [DispId(3)]
+        void CancelBufferTranscription();
     }
 
     // ----------------------------------------------------------------
@@ -74,7 +89,7 @@ namespace AudioTranscriberLib
     [Guid("DDCCBBAA-CCCC-BBBB-AAAA-999988887777")]
     [ProgId("AudioTranscriber.Component")]
     [ClassInterface(ClassInterfaceType.None)]
-    public class AudioTranscriber : IAudioTranscriber
+    public class AudioTranscriber : IAudioStreamingTranscriber
     {
         private ITranscriptionCallback? _callback;
         private IAudioConfig? _config;
@@ -153,11 +168,6 @@ namespace AudioTranscriberLib
         private string TranscribePartial(byte[] chunk, int length)
         {
             return $"[partial {length} bytes]";
-        }
-
-        public string TranscribeBuffer([MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_UI1)] byte[] audioBuffer)
-        {
-            throw new NotImplementedException();
         }
     }
 }
