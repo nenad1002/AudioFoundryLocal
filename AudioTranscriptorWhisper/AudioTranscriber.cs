@@ -13,6 +13,9 @@ namespace AudioTranscriberLib
     {
         [DispId(1)] string ModelAlias { get; }
         [DispId(2)] string Language { get; }
+        [DispId(3)] int SampleRate { get; }
+        [DispId(4)] int Channels { get; }
+        [DispId(5)] int BitsPerSample { get; }
     }
 
     // ----------------------------------------------------------------
@@ -32,6 +35,12 @@ namespace AudioTranscriberLib
 
         public string ModelAlias { get; }
         public string Language { get; }
+
+        public int SampleRate => throw new NotImplementedException();
+
+        public int Channels => throw new NotImplementedException();
+
+        public int BitsPerSample => throw new NotImplementedException();
     }
 
     // ----------------------------------------------------------------
