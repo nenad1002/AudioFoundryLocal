@@ -60,6 +60,11 @@ namespace AudioTranscriberLib
         [DispId(3)]
         void Start(IStream audioStream);
         [DispId(4)] void Stop();
+        [DispId(5)]
+        string TranscribeBuffer(
+     [MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_UI1)]
+        byte[] audioBuffer
+ );
     }
 
     // ----------------------------------------------------------------
@@ -148,6 +153,11 @@ namespace AudioTranscriberLib
         private string TranscribePartial(byte[] chunk, int length)
         {
             return $"[partial {length} bytes]";
+        }
+
+        public string TranscribeBuffer([MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_UI1)] byte[] audioBuffer)
+        {
+            throw new NotImplementedException();
         }
     }
 }
