@@ -11,6 +11,7 @@ namespace AudioTranscriberLib
     [InterfaceType(ComInterfaceType.InterfaceIsDual)]
     public interface IAudioConfig
     {
+        [DispId(0)] int Version { get; }
         [DispId(1)] string ModelAlias { get; }
         [DispId(2)] string Language { get; }
         [DispId(3)] int SampleRate { get; }
@@ -41,6 +42,8 @@ namespace AudioTranscriberLib
         public int Channels => throw new NotImplementedException();
 
         public int BitsPerSample => throw new NotImplementedException();
+
+        public int Version => 1;
     }
 
     // ----------------------------------------------------------------
