@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 
 namespace AudioTranscriberLib
@@ -59,19 +60,48 @@ namespace AudioTranscriberLib
         [DispId(3)] void OnError(string message);
     }
 
-    // ----------------------------------------------------------------
-    // COM control interface for the streaming transcriber, using IAudioStream
-    // ----------------------------------------------------------------
     [ComVisible(true)]
-    [Guid("AABBCCDD-7777-8888-9999-AAAABBBBCCCC")]
+    [Guid("A1B2C3D4-1111-2222-3333-444455556666")]
+    [InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    public interface IAudioPacket
+    {
+        [DispId(1)]
+        [return: MarshalAs(UnmanagedType.SafeArray, SafeArraySubType = VarEnum.VT_UI1)]
+        byte[] Data { get; }
+
+        [DispId(2)]
+        long Timestamp100ns { get; }
+
+        [DispId(3)]
+        int SequenceNumber { get; }
+    }
+
+    [ComVisible(true)]
+    [Guid("D4C3B2A1-6666-5555-4444-333322221111")]
+    [InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    public interface IAudioPacketCallback
+    {
+        [DispId(1)]
+        void OnPacket(IAudioPacket packet);
+
+        [DispId(2)]
+        void OnError(string message);
+    }
+
+    [ComVisible(true)]
+    [Guid("E1F2A3B4-7777-8888-9999-AAAA0000BBBB")]
     [InterfaceType(ComInterfaceType.InterfaceIsDual)]
     public interface IAudioStreamingTranscriber
     {
         [DispId(1)] void Initialize(IAudioConfig config);
-        [DispId(2)] void RegisterCallback(ITranscriptionCallback callback);
-        [DispId(3)]
-        void Start(IStream audioStream);
-        [DispId(4)] void Stop();
+        [DispId(2)] void RegisterTranscriptionCallback(ITranscriptionCallback cb);
+        [DispId(3)] void RegisterAudioCallback(IAudioPacketCallback cb);
+
+        [DispId(4)] void Start();
+        [DispId(5)] void Stop();
+
+        [DispId(6)]
+        void PushPacket(IAudioPacket packet);
     }
 
     // ----------------------------------------------------------------
@@ -105,11 +135,7 @@ namespace AudioTranscriberLib
     {
         private ITranscriptionCallback? _callback;
         private IAudioConfig? _config;
-        private IStream? _stream;
-        private CancellationTokenSource? _cts;
-        private Task? _processingTask;
-        // TODO: revise buffer size
-        private readonly int _bufferSize = 4096;
+        private IAudioPacketCallback _audioCb;
 
         public AudioTranscriber(IAudioConfig config)
         {
@@ -126,60 +152,51 @@ namespace AudioTranscriberLib
             _callback = callback;
         }
 
-        public void Start(IStream audioStream)
+        private string TranscribePartial(byte[] chunk, int length)
         {
-            if (_config == null)
-                throw new InvalidOperationException("Initialize must be called first.");
+            return $"[partial {length} bytes]";
+        }
 
-            _stream = audioStream;
-            _cts = new CancellationTokenSource();
-            _processingTask = Task.Run(() => ProcessStreamLoop(_cts.Token), _cts.Token);
+        public void RegisterTranscriptionCallback(ITranscriptionCallback cb)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void RegisterAudioCallback(IAudioPacketCallback cb)
+        {
+            throw new NotImplementedException();
+        }
+
+        public void Start()
+        {
+            throw new NotImplementedException();
+        }
+
+        public void PushPacket(IAudioPacket packet)
+        {
+            try
+            {
+                // Buffer, chunk as appropriate and call into Whisper
+                _audioCb.OnPacket(packet);
+
+                // Should probably be within OnPacket impl.
+                _callback.OnPartialResult($"Packet {packet.SequenceNumber} received");
+
+                if (packet.SequenceNumber % 5 == 0)
+                {
+                    _callback.OnFinalResult($"Completed up to packet {packet.SequenceNumber}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _audioCb.OnError(ex.Message);
+                _callback.OnError(ex.Message);
+            }
         }
 
         public void Stop()
         {
-            _cts?.Cancel();
-            try { _processingTask?.Wait(); } catch (AggregateException ae) when (ae.InnerException is OperationCanceledException) { }
-        }
-
-        private void ProcessStreamLoop(CancellationToken token)
-        {
-            var buffer = new byte[_bufferSize];
-            while (!token.IsCancellationRequested)
-            {
-                int bytesRead;
-                IntPtr readPtr = Marshal.AllocCoTaskMem(sizeof(int));
-                try
-                {
-                    _stream!.Read(buffer, _bufferSize, readPtr);
-                    bytesRead = Marshal.ReadInt32(readPtr);
-                }
-                catch (Exception ex)
-                {
-                    _callback?.OnError(ex.Message);
-                    break;
-                }
-                finally
-                {
-                    Marshal.FreeCoTaskMem(readPtr);
-                }
-
-                if (bytesRead <= 0)
-                {
-                    Thread.Sleep(10);
-                    continue;
-                }
-
-                // TODO: here it goes a real call into Whisper.
-                string partial = TranscribePartial(buffer, bytesRead);
-                _callback?.OnPartialResult(partial);
-            }
-            _callback?.OnFinalResult("[stream ended]");
-        }
-
-        private string TranscribePartial(byte[] chunk, int length)
-        {
-            return $"[partial {length} bytes]";
+            throw new NotImplementedException();
         }
     }
 }
